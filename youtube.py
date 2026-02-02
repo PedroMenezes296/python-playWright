@@ -19,6 +19,11 @@ with sync_playwright() as pw:
         novo_botao.click()
     pagina2 = pagina2_info.value
     
+    novo_botao2 = pagina.get_by_label("Veja mais", exact=True)
+    expect(novo_botao2).to_be_visible(timeout=300_000)
+    with contexto.expect_page() as pagina3_info:
+        novo_botao2.click()
+    pagina3 = pagina3_info.value
     
     
     #get_by_role("button", name="Pular", exact=True)
