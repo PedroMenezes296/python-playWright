@@ -1,8 +1,25 @@
+from numpy import info
 from playwright.sync_api import sync_playwright, expect
+
+def esperar_saiba_ou_veja(pagina, saiba_locator, veja_locator, intervalo_ms=200):
+    while True:
+        if saiba_locator.is_visible():
+            return "saiba"
+        if veja_locator.is_visible():
+            return "veja"
+        pagina.wait_for_timeout(intervalo_ms)
+        
+def clicar_no_botao_pular(pular_locator):
+    expect(pular_locator).to_be_visible()
+    pular_locator.click().timeout(0)
+
 
 with sync_playwright() as pw:
     navegador = pw.chromium.launch(headless=False)
     contexto = navegador.new_context()
+    
+    contexto.set_default_timeout(0)
+    contexto.set_default_navigation_timeout(0)
     
     import time
     # Abrir uma nova aba
@@ -12,18 +29,46 @@ with sync_playwright() as pw:
     pagina.goto("https://www.youtube.com/watch?v=-vjW4dHEvCs&list=OLAK5uy_kCgEwOlrnK0sUf-U4jfnw9XAM3XKvyU_k")
     
     
-        # esperar um elemento aparecer na tela
-    novo_botao = pagina.get_by_label("Saiba mais", exact=True)
-    expect(novo_botao).to_be_visible(timeout=300_000)
-    with contexto.expect_page() as pagina2_info:
-        novo_botao.click()
-    pagina2 = pagina2_info.value
+        # definindo os botoes
+    botao_vejamais_anuncio = pagina.get_by_label("Veja mais", exact=True)
+    botao_saibaMais_anuncio = pagina.get_by_label("Saiba mais", exact=True)
+    botao_pular_youtube = pagina.get_by_role("button", name="Pular", exact=True)
     
-    novo_botao2 = pagina.get_by_label("Veja mais", exact=True)
-    expect(novo_botao2).to_be_visible(timeout=300_000)
-    with contexto.expect_page() as pagina3_info:
-        novo_botao2.click()
-    pagina3 = pagina3_info.value
+    
+    qual = esperar_saiba_ou_veja(pagina, botao_saibaMais_anuncio, botao_vejamais_anuncio)
+
+    if qual == "saiba":
+    # clica no saiba mais
+        with contexto.expect_page() as pagina2_info:
+            botao_saibaMais_anuncio.click()
+        pagina2 = pagina2_info.value
+        pagina2.close()
+        pagina.locator("#movie_player video").click()  # volta o foco para o video
+        clicar_no_botao_pular(botao_pular_youtube)
+    else:
+    # clica no veja mais
+        with contexto.expect_page() as pagina3_info:
+            botao_vejamais_anuncio.click()
+        pagina3 = pagina3_info.value
+        pagina3.close()
+        pagina.locator("#movie_player video").click()  # volta o foco para o video
+        clicar_no_botao_pular(botao_pular_youtube)
+            
+    
+    # expect(botao_saibaMais_anuncio or botao_vejamais_anuncio).to_be_visible()
+    # with contexto.expect_page() as pagina2_info:
+    #     botao_saibaMais_anuncio.click()
+    # pagina2 = pagina2_info.value
+    
+
+    # expect(botao_vejamais_anuncio).to_be_visible()
+    # with contexto.expect_page() as pagina3_info:
+    #     botao_vejamais_anuncio.click()
+    # pagina3 = pagina3_info.value
+    
+    # botao_pular_youtube = pagina3.get_by_role("button", name="Pular", exact=True)
+    # expect(botao_pular_youtube).to_be_visible()
+    # botao_pular_youtube.click()
     
     
     #get_by_role("button", name="Pular", exact=True)
@@ -32,4 +77,4 @@ with sync_playwright() as pw:
     
     time.sleep(5)
 
-    #navegador.close()
+    navegador.close()
