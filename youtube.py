@@ -1,12 +1,14 @@
 from numpy import info
 from playwright.sync_api import sync_playwright, expect
 
-def esperar_saiba_ou_veja(pagina, saiba_locator, veja_locator, intervalo_ms=200):
+def esperar_saiba_ou_veja(pagina, saiba_locator, veja_locator, acesseSite_locator, intervalo_ms=200):
     while True:
         if saiba_locator.is_visible():
             return "saiba"
         if veja_locator.is_visible():
             return "veja"
+        if acesseSite_locator.is_visible():
+            return "acessar_site"
         pagina.wait_for_timeout(intervalo_ms)
         
 def clicar_no_botao_pular(pular_locator):
@@ -32,10 +34,11 @@ with sync_playwright() as pw:
         # definindo os botoes
     botao_vejamais_anuncio = pagina.get_by_label("Veja mais", exact=True)
     botao_saibaMais_anuncio = pagina.get_by_label("Saiba mais", exact=True)
+    botao_acessar_site_anuncio = pagina.get_by_role("link", name="Acessar o site This link")
     botao_pular_youtube = pagina.get_by_role("button", name="Pular", exact=True)
     
     
-    qual = esperar_saiba_ou_veja(pagina, botao_saibaMais_anuncio, botao_vejamais_anuncio)
+    qual = esperar_saiba_ou_veja(pagina, botao_saibaMais_anuncio, botao_vejamais_anuncio, botao_acessar_site_anuncio)
 
     if qual == "saiba":
     # clica no saiba mais
@@ -43,6 +46,13 @@ with sync_playwright() as pw:
             botao_saibaMais_anuncio.click()
         pagina2 = pagina2_info.value
         pagina2.close()
+        pagina.locator("#movie_player video").click()  # volta o foco para o video
+        clicar_no_botao_pular(botao_pular_youtube)
+    elif qual == "acessar_site":
+        with contexto.expect_page() as pagina4_info:
+            botao_acessar_site_anuncio.click()
+        pagina4 = pagina4_info.value
+        pagina4.close()
         pagina.locator("#movie_player video").click()  # volta o foco para o video
         clicar_no_botao_pular(botao_pular_youtube)
     else:
