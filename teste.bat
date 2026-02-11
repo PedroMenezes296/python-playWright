@@ -7,4 +7,4 @@ start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" ^
 
 timeout /t 3 >nul
 
-python login.py
+python login2.py
