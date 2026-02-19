@@ -1,98 +1,246 @@
 # youtube_cdp.py
 # Pré-requisito: Chrome já aberto com CDP em http://localhost:9222
-# Ex.: chrome.exe --remote-debugging-port=9222 --user-data-dir="C:\playwright-profile-youtube" --profile-directory="Default"
 
-from playwright.sync_api import sync_playwright,expect
-
+import time
+from playwright.sync_api import sync_playwright, expect
 
 VIDEO_URL = "https://www.youtube.com/watch?v=-vjW4dHEvCs&list=OLAK5uy_kCgEwOlrnK0sUf-U4jfnw9XAM3XKvyU_k"
 
+
 def pegar_contexto_e_pagina(browser):
-    # Em CDP geralmente já existe 1 contexto e pelo menos 1 aba
     contexto = browser.contexts[0] if browser.contexts else browser.new_context()
     pagina = contexto.pages[0] if contexto.pages else contexto.new_page()
     pagina.bring_to_front()
     return contexto, pagina
 
-def esperar_Locator(pagina, saiba_locator, veja_locator, acesseSite_locator):
-    intervalo_ms = 500
+
+def pegar_video_id(pagina):
+    # Pega o parâmetro v= da URL (YouTube SPA muda URL, mas o id é o que importa)
+    try:
+        return pagina.evaluate("() => new URL(location.href).searchParams.get('v') || ''")
+    except:
+        return ""
+
+
+def esperar_trocar_video(pagina, video_id_atual, timeout_ms=180_000):
+    """
+    Espera o vídeo trocar (autoplay) comparando videoId.
+    timeout_ms: quanto tempo esperar antes de desistir e seguir o loop.
+    """
+    try:
+        pagina.wait_for_function(
+            "(prev) => (new URL(location.href).searchParams.get('v') || '') !== prev",
+            arg=video_id_atual,
+            timeout=timeout_ms
+        )
+        return True
+    except:
+        return False
+
+
+def esperar_Locator(pagina, candidatos_por_acao, intervalo_ms=500):
+    """
+    candidatos_por_acao: dict[str, list[Locator]]
+    Retorna (acao, locator_que_apareceu)
+    Fica esperando até aparecer algum.
+    """
     while True:
-        if saiba_locator.is_visible():
-            return "saiba"
-        if veja_locator.is_visible():
-            return "veja"
-        if acesseSite_locator.is_visible():
-            return "acessar_site"
+        for acao, lista_locators in candidatos_por_acao.items():
+            for loc in lista_locators:
+                try:
+                    if loc.is_visible():
+                        return acao, loc
+                except:
+                    pass
         pagina.wait_for_timeout(intervalo_ms)
 
+
+def garantir_video_tocando(pagina):
+    video = pagina.locator("#movie_player video")
+    tocando = False
+    try:
+        video.wait_for(state="attached", timeout=30_000)
+        tocando = video.evaluate("v => !v.paused && !v.ended && v.readyState > 2")
+        if not tocando:
+            video.click(timeout=5_000)
+            tocando = video.evaluate("v => !v.paused && !v.ended && v.readyState > 2")
+    except:
+        pass
+    return tocando
+
+
 def clicar_no_botao_pular(pular_locator):
-    expect(pular_locator).to_be_visible()
-    pular_locator.click(timeout=30_000)
+    try:
+        expect(pular_locator).to_be_visible(timeout=30_000)
+        pular_locator.click(timeout=30_000)
+    except:
+        pass
 
-    
-    
+
+def clicar_cta_abrindo_e_fechando(contexto, pagina_principal, locator_cta, botao_pular_youtube):
+    nova = None
+    # 1) tenta capturar nova aba
+    try:
+        with contexto.expect_page(timeout=5_000) as pagina_info:
+            locator_cta.click(timeout=30_000)
+        nova = pagina_info.value
+    except:
+        # CTA pode abrir na mesma aba ou não abrir nada
+        try:
+            locator_cta.click(timeout=30_000)
+        except:
+            pass
+
+    # 2) se abriu nova, fecha
+    if nova is not None:
+        try:
+            nova.wait_for_timeout(2000)  # melhor que time.sleep
+            nova.close()
+        except:
+            pass
+
+    # 3) garante que o vídeo principal está tocando
+    garantir_video_tocando(pagina_principal)
+
+    # 4) tenta pular anúncio
+    clicar_no_botao_pular(botao_pular_youtube)
+
+
 with sync_playwright() as pw:
-    # Conecta no Chrome já aberto com CDP
     browser = pw.chromium.connect_over_cdp("http://localhost:9222")
-
     contexto, pagina = pegar_contexto_e_pagina(browser)
 
     print("URL inicial:", pagina.url)
-
-    # Vai direto para o vídeo (commit evita travar esperando load completo)
     pagina.goto(VIDEO_URL, wait_until="commit", timeout=30_000)
 
-    #get_by_role("link", name="Saiba mais This link opens in")
-    botao_vejamais_anuncio = pagina.get_by_label("Veja mais", exact=True)
-    botao_saibaMais_anuncio = pagina.get_by_label("Saiba mais", exact=True)
-    botao_acessar_site_anuncio = pagina.get_by_role("link", name="Acessar o site This link")
-    botao_pular_youtube = pagina.get_by_role("button", name="Pular", exact=True)
-    botao_inscrever_se = pagina.get_by_role("link", name="Inscrever-se This link opens")
-    botao_teste_ja = pagina.get_by_role("link", name="Teste já This link opens in")
+    while True:
+        try:
+            # estado atual do vídeo (antes do ciclo)
+            video_id_antes = pegar_video_id(pagina)
+            print("VideoID atual:", video_id_antes, "| URL:", pagina.url)
 
-    qual = esperar_Locator(pagina, botao_saibaMais_anuncio, botao_vejamais_anuncio, botao_acessar_site_anuncio)
+            botao_pular_youtube = pagina.get_by_role("button", name="Pular", exact=True)
 
-    if qual == "saiba":
-    # clica no saiba mais
-        with contexto.expect_page() as pagina2_info:
-            botao_saibaMais_anuncio.click()
-        pagina2 = pagina2_info.value
-        pagina2.close()
-        pagina.locator("#movie_player video").click()  # volta o foco para o video
-        clicar_no_botao_pular(botao_pular_youtube)
-    elif qual == "acessar_site":
-        with contexto.expect_page() as pagina2_info:
-            botao_acessar_site_anuncio.click()
-        pagina2 = pagina2_info.value
-        pagina2.close()
-        pagina.locator("#movie_player video").click()  # volta o foco para o video
-        clicar_no_botao_pular(botao_pular_youtube)
-    elif qual == "veja":
-    # clica no veja mais
-        with contexto.expect_page() as pagina2_info:
-            botao_vejamais_anuncio.click()
-        pagina2 = pagina2_info.value
-        pagina2.close()
-        pagina.locator("#movie_player video").click()  # volta o foco para o video
-        clicar_no_botao_pular(botao_pular_youtube)
-    elif qual == "inscrever_se":
-        with contexto.expect_page() as pagina2_info:
-            botao_inscrever_se.click()
-        pagina2 = pagina2_info.value
-        pagina2.close()
-        pagina.locator("#movie_player video").click()  # volta o foco para o video
-        clicar_no_botao_pular(botao_pular_youtube)
-    elif qual == "teste_ja":
-        with contexto.expect_page() as pagina2_info:
-            botao_teste_ja.click()
-        pagina2 = pagina2_info.value
-        pagina2.close()
-        pagina.locator("#movie_player video").click()  # volta o foco para o video
-        clicar_no_botao_pular(botao_pular_youtube)
-    else:
-        print("Nenhum anúncio encontrado. Continuando o vídeo normalmente.")
-        clicar_no_botao_pular(botao_pular_youtube)
+            # SAIBA MAIS
+            saiba_1 = pagina.get_by_role("link", name="Saiba mais This link opens in")
+            saiba_2 = pagina.get_by_label("Saiba mais", exact=True)
+            saiba_3 = pagina.get_by_role("link", name="Saiba mais This link")
 
+            # VEJA MAIS
+            veja_1 = pagina.get_by_label("Veja mais", exact=True)
+            veja_2 = pagina.get_by_role("link", name="Veja mais This link opens in")
+            veja_3 = pagina.get_by_role("link", name="Veja mais This link")
+            veja_4 = pagina.get_by_role("link", name="Veja mais")
 
-    # Fecha a conexão CDP (pode fechar o Chrome dependendo do caso)
-    browser.close()
+            # ACESSAR O SITE
+            site_1 = pagina.get_by_role("link", name="Acessar o site This link opens in")
+            site_2 = pagina.get_by_label("Acessar o site", exact=True)
+            site_3 = pagina.get_by_role("link", name="Acessar o site This link")
+            site_4 = pagina.get_by_role("link", name="Acessar o site")
+
+            site_var_1 = pagina.get_by_role("link", name="Acessar site This link opens in")
+            site_var_2 = pagina.get_by_label("Acessar site", exact=True)
+            site_var_3 = pagina.get_by_role("link", name="Acessar site This link")
+            site_var_4 = pagina.get_by_role("link", name="Acessar site")
+
+            site_visite_1 = pagina.get_by_role("link", name="Visite site This link opens in")
+            site_visite_2 = pagina.get_by_label("Visite site", exact=True)
+            site_visite_3 = pagina.get_by_role("link", name="Visite site This link")
+            site_visite_4 = pagina.get_by_role("link", name="Visite site")
+
+            # INSCR(E)V- SE AGORA
+            inscrevase_agora_1 = pagina.get_by_label("Inscreva-se agora", exact=True)
+            inscrevase_agora_2 = pagina.get_by_role("link", name="Inscreva-se agora This link opens in")
+            inscrevase_agora_3 = pagina.get_by_role("link", name="Inscreva-se agora This link")
+            inscrevase_agora_4 = pagina.get_by_role("link", name="Inscreva-se agora")
+
+            # INSCREVA-SE
+            inscrevase_1 = pagina.get_by_label("Inscreva-se", exact=True)
+            inscrevase_2 = pagina.get_by_role("link", name="Inscreva-se This link opens in")
+            inscrevase_3 = pagina.get_by_role("link", name="Inscreva-se This link")
+            inscrevase_4 = pagina.get_by_role("link", name="Inscreva-se")
+
+            # INSCREVER-SE
+            inscrever_se_1 = pagina.get_by_label("Inscrever-se", exact=True)
+            inscrever_se_2 = pagina.get_by_role("link", name="Inscrever-se This link opens in")
+            inscrever_se_3 = pagina.get_by_role("link", name="Inscrever-se This link")
+            inscrever_se_4 = pagina.get_by_role("link", name="Inscrever-se")
+
+            # SOLICITAR COTAÇÃO
+            cotacao_1 = pagina.get_by_label("Solicitar cotação", exact=True)
+            cotacao_2 = pagina.get_by_role("link", name="Solicitar cotação This link opens in")
+            cotacao_3 = pagina.get_by_role("link", name="Solicitar cotação This link")
+            cotacao_4 = pagina.get_by_role("link", name="Solicitar cotação")
+
+            # CONTATO
+            contato_1 = pagina.get_by_label("Contato", exact=True)
+            contato_2 = pagina.get_by_role("link", name="Contato This link opens in")
+            contato_3 = pagina.get_by_role("link", name="Contato This link")
+            contato_4 = pagina.get_by_role("link", name="Contato")
+
+            # DOWNLOAD
+            download_1 = pagina.get_by_label("Download", exact=True)
+            download_2 = pagina.get_by_role("link", name="Download This link opens in")
+            download_3 = pagina.get_by_role("link", name="Download This link")
+            download_4 = pagina.get_by_role("link", name="Download")
+
+            # RESERVAR AGORA
+            reservar_1 = pagina.get_by_label("Reservar agora", exact=True)
+            reservar_2 = pagina.get_by_role("link", name="Reservar agora This link opens in")
+            reservar_3 = pagina.get_by_role("link", name="Reservar agora This link")
+            reservar_4 = pagina.get_by_role("link", name="Reservar agora")
+
+            # COMPRAR AGORA
+            comprar_1 = pagina.get_by_label("Comprar agora", exact=True)
+            comprar_2 = pagina.get_by_role("link", name="Comprar agora This link opens in")
+            comprar_3 = pagina.get_by_role("link", name="Comprar agora This link")
+            comprar_4 = pagina.get_by_role("link", name="Comprar agora")
+
+            # COMECE AGORA
+            comece_agora_1 = pagina.get_by_label("Comece agora", exact=True)
+            comece_agora_2 = pagina.get_by_role("link", name="Comece agora This link opens in")
+            comece_agora_3 = pagina.get_by_role("link", name="Comece agora This link")
+            comece_agora_4 = pagina.get_by_role("link", name="Comece agora")
+
+            # VISITAR SITE
+            visitar_site_1 = pagina.get_by_label("Visitar site", exact=True)
+            visitar_site_2 = pagina.get_by_role("link", name="Visitar site This link opens in")
+            visitar_site_3 = pagina.get_by_role("link", name="Visitar site This link")
+            visitar_site_4 = pagina.get_by_role("link", name="Visitar site")
+
+            candidatos_por_acao = {
+                "saiba": [saiba_1, saiba_2, saiba_3],
+                "veja": [veja_1, veja_2, veja_3, veja_4],
+                "acessar_o_site": [site_1, site_2, site_3, site_4],
+                "visite_o_site": [site_visite_1, site_visite_2, site_visite_3, site_visite_4],
+                "acessar_site": [site_var_1, site_var_2, site_var_3, site_var_4],
+                "inscreva_agora": [inscrevase_agora_1, inscrevase_agora_2, inscrevase_agora_3, inscrevase_agora_4],
+                "inscreva": [inscrevase_1, inscrevase_2, inscrevase_3, inscrevase_4],
+                "inscrever_se": [inscrever_se_1, inscrever_se_2, inscrever_se_3, inscrever_se_4],
+                "cotacao": [cotacao_1, cotacao_2, cotacao_3, cotacao_4],
+                "contato": [contato_1, contato_2, contato_3, contato_4],
+                "download": [download_1, download_2, download_3, download_4],
+                "reservar": [reservar_1, reservar_2, reservar_3, reservar_4],
+                "comprar": [comprar_1, comprar_2, comprar_3, comprar_4],
+                "comece": [comece_agora_1, comece_agora_2, comece_agora_3, comece_agora_4],
+                "visitar_site": [visitar_site_1, visitar_site_2, visitar_site_3, visitar_site_4],
+            }
+
+            qual, locator_ativo = esperar_Locator(pagina, candidatos_por_acao, intervalo_ms=500)
+            print("CTA encontrado:", qual)
+
+            clicar_cta_abrindo_e_fechando(contexto, pagina, locator_ativo, botao_pular_youtube)
+
+            # ✅ agora a lógica do autoplay: espera trocar de vídeo (se trocar)
+            trocou = esperar_trocar_video(pagina, video_id_antes, timeout_ms=180_000)
+            if trocou:
+                print("Autoplay trocou para:", pagina.url)
+            else:
+                print("Não trocou de vídeo (ou autoplay desligado). Rodando próximo ciclo...")
+
+        except Exception as e:
+            print("Erro no ciclo:", e)
+
+        time.sleep(2)
+
+    # browser.close()  # (nunca chega aqui por causa do while True)
