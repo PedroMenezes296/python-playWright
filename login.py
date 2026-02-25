@@ -240,7 +240,8 @@ with sync_playwright() as pw:
 
         except Exception as e:
             print("Erro no ciclo:", e)
-
+        # vai para a aba da direita
+        pagina.keyboard.press("Control+Tab")
         time.sleep(2)
 
     # browser.close()  # (nunca chega aqui por causa do while True)
